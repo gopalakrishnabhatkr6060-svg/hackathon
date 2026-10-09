@@ -1,0 +1,276 @@
+
+from pathlib import Path
+
+import streamlit as st
+import pandas as pd
+import xgboost as xgb
+
+
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
+
+st.set_page_config(
+    page_title="Supplier Risk Predictor",
+    page_icon="🤖",
+    layout="centered"
+)
+
+
+# =========================================================
+# 2. MODEL FILE PATH
+# =========================================================
+
+MODEL_PATH = Path(
+    r"C:\Users\Dell\OneDrive\Desktop\New folder (2)\xgb_supplier_risk_model.json"
+)
+
+
+# =========================================================
+# 3. LOAD XGBOOST JSON MODEL
+# =========================================================
+
+@st.cache_resource
+def load_model(file_path):
+    """
+    Load a native XGBoost JSON model.
+    Assumes the original model is an XGBClassifier.
+    """
+    model = xgb.XGBClassifier()
+    model.load_model(str(file_path))
+    return model
+
+
+if not MODEL_PATH.exists():
+    st.error(
+        f"Model file not found:\n{MODEL_PATH}\n\n"
+        "Check the file name and location."
+    )
+    st.stop()
+
+try:
+    model = load_model(MODEL_PATH)
+    st.sidebar.success("Model loaded successfully!")
+
+except Exception as e:
+    st.error(f"Error loading XGBoost model: {e}")
+    st.stop()
+
+
+# =========================================================
+# 4. MODEL INFORMATION
+# =========================================================
+
+st.sidebar.header("Model Information")
+st.sidebar.write(f"Model type: {type(model).__name__}")
+
+expected_features = None
+
+if hasattr(model, "feature_names_in_"):
+    expected_features = list(model.feature_names_in_)
+
+elif hasattr(model, "get_booster"):
+    expected_features = model.get_booster().feature_names
+
+if expected_features:
+    st.sidebar.write("Expected features:")
+    st.sidebar.write(expected_features)
+
+
+# =========================================================
+# 5. APPLICATION HEADER
+# =========================================================
+
+st.title("🤖 Supplier Risk Prediction System")
+
+st.write(
+    "Enter supplier performance and inventory information "
+    "to obtain a prediction from your trained XGBoost model."
+)
+
+st.divider()
+
+
+# =========================================================
+# 6. MODEL INPUT FEATURES
+# =========================================================
+
+feature_cols = [
+    "avg_price_creep",
+    "rec_rejection_pct",
+    "rejection_spike_ratio",
+    "min_days_to_expiry",
+    "criticality_numeric",
+    "stock_cover_days",
+    "is_single_source"
+]
+
+
+# =========================================================
+# 7. SUPPLIER INPUT FORM
+# =========================================================
+
+with st.form("supplier_risk_form"):
+
+    st.subheader("Supplier Information")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        avg_price_creep = st.number_input(
+            "Average Price Creep",
+            value=0.0,
+            help="Use the same scale as the training data."
+        )
+
+        rec_rejection_pct = st.number_input(
+            "Recent Rejection Percentage",
+            min_value=0.0,
+            max_value=100.0,
+            value=0.0,
+            help="Enter the percentage from 0 to 100."
+        )
+
+        rejection_spike_ratio = st.number_input(
+            "Rejection Spike Ratio",
+            min_value=0.0,
+            value=1.0,
+            help="Use the ratio definition from model training."
+        )
+
+        min_days_to_expiry = st.number_input(
+            "Minimum Days to Expiry",
+            min_value=0,
+            value=30,
+            help="Enter the minimum number of days until expiry."
+        )
+
+    with col2:
+
+        criticality_numeric = st.number_input(
+            "Criticality Numeric",
+            min_value=0.0,
+            value=1.0,
+            help="Use the numeric encoding used during training."
+        )
+
+        stock_cover_days = st.number_input(
+            "Stock Cover (Days)",
+            min_value=0.0,
+            value=30.0,
+            help="Enter the number of days covered by current stock."
+        )
+
+        is_single_source = st.selectbox(
+            "Single-Source Supplier?",
+            options=[0, 1],
+            format_func=lambda value: (
+                "Yes" if value == 1 else "No"
+            ),
+            help="0 = No, 1 = Yes, if this matches training."
+        )
+
+    submitted = st.form_submit_button(
+        "🔮 Predict Supplier Risk",
+        use_container_width=True
+    )
+
+
+# =========================================================
+# 8. PREDICTION
+# =========================================================
+
+if submitted:
+
+    # Prepare the input using the expected column names.
+    input_data = pd.DataFrame(
+        [{
+            "avg_price_creep": avg_price_creep,
+            "rec_rejection_pct": rec_rejection_pct,
+            "rejection_spike_ratio": rejection_spike_ratio,
+            "min_days_to_expiry": min_days_to_expiry,
+            "criticality_numeric": criticality_numeric,
+            "stock_cover_days": stock_cover_days,
+            "is_single_source": is_single_source
+        }],
+        columns=feature_cols
+    )
+
+    st.subheader("Input Summary")
+    st.dataframe(input_data, use_container_width=True)
+
+    try:
+
+        # Check feature names and ordering where available.
+        if expected_features is not None:
+            if list(expected_features) != feature_cols:
+                st.error(
+                    "Feature mismatch detected.\n\n"
+                    f"Model expects: {expected_features}\n\n"
+                    f"Application provides: {feature_cols}\n\n"
+                    "Update feature_cols and the input form to match "
+                    "the model's actual training features and order."
+                )
+                st.stop()
+
+        # Generate prediction.
+        prediction = model.predict(input_data)
+
+        st.subheader("Prediction Result")
+        st.success(f"Model output: {prediction[0]}")
+
+        # Display probabilities when supported.
+        if hasattr(model, "predict_proba"):
+
+            probabilities = model.predict_proba(input_data)
+
+            classes = getattr(model, "classes_", None)
+
+            if classes is not None:
+
+                probability_df = pd.DataFrame(
+                    probabilities,
+                    columns=[str(class_name) for class_name in classes]
+                )
+
+                st.subheader("Prediction Probabilities")
+
+                st.dataframe(
+                    probability_df,
+                    use_container_width=True
+                )
+
+                for class_name, probability in zip(
+                    classes, probabilities[0]
+                ):
+                    st.write(
+                        f"Class {class_name}: "
+                        f"{probability * 100:.2f}%"
+                    )
+
+                st.caption(
+                    "Probabilities are model estimates, not guarantees "
+                    "of actual supplier risk."
+                )
+
+    except Exception as e:
+
+        st.error(f"Prediction failed: {e}")
+
+        st.info(
+            "Check the model type, expected feature names, feature "
+            "order, data types, and training preprocessing."
+        )
+
+
+# =========================================================
+# 9. FOOTER
+# =========================================================
+
+st.divider()
+
+st.caption(
+    "Supplier Risk Prediction System | "
+    "Powered by Python, Streamlit, and XGBoost"
+)
