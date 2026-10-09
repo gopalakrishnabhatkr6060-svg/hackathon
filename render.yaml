@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: supplier-risk-intelligence
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHON_PATH
+        value: /opt/venv/bin/python3

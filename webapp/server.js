@@ -9,7 +9,7 @@ const db = require('./db/database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const PYTHON_PATH = "D:\\miniconda3\\python.exe";
+const PYTHON_PATH = process.env.PYTHON_PATH || (process.platform === 'win32' ? "D:\\miniconda3\\python.exe" : "python3");
 const BASE_DIR = path.join(__dirname, '..');
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const PDF_KNOWLEDGE_FILE = path.join(__dirname, 'db', 'pdf_knowledge.json');
