@@ -1,0 +1,33 @@
+{
+    "timestamp": "2026-10-10 01:49:51",
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0,
+    "roc_auc": 1.0,
+    "confusion_matrix": [
+        [
+            35,
+            0
+        ],
+        [
+            0,
+            18
+        ]
+    ],
+    "train_samples": 157,
+    "val_samples": 53,
+    "total_samples": 210,
+    "n_estimators": 120,
+    "max_depth": 4,
+    "learning_rate": 0.1,
+    "feature_importances": {
+        "avg_price_creep": 1.0,
+        "rec_rejection_pct": 0.0,
+        "rejection_spike_ratio": 0.0,
+        "min_days_to_expiry": 0.0,
+        "criticality_numeric": 0.0,
+        "stock_cover_days": 0.0,
+        "is_single_source": 0.0
+    }
+}
