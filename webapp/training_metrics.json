@@ -1,5 +1,5 @@
 {
-    "timestamp": "2026-10-10 01:49:51",
+    "timestamp": "2026-10-10 03:15:03",
     "accuracy": 1.0,
     "precision": 1.0,
     "recall": 1.0,
@@ -18,7 +18,7 @@
     "train_samples": 157,
     "val_samples": 53,
     "total_samples": 210,
-    "n_estimators": 120,
+    "n_estimators": 100,
     "max_depth": 4,
     "learning_rate": 0.1,
     "feature_importances": {

@@ -6,6 +6,64 @@ const { spawn } = require('child_process');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const db = require('./db/database');
+const jsEngine = require('./js_ml_engine');
+
+function runWithPythonFallback(pythonArgs, stdinData, jsFallbackFn, res) {
+    try {
+        const py = spawn(PYTHON_PATH, pythonArgs);
+        let output = '';
+        let errOutput = '';
+        let hasErrored = false;
+
+        py.on('error', (err) => {
+            hasErrored = true;
+            try {
+                const fallbackResult = jsFallbackFn();
+                return res.json(fallbackResult);
+            } catch (jsErr) {
+                return res.status(500).json({ status: 'error', message: jsErr.message });
+            }
+        });
+
+        if (stdinData) {
+            py.stdin.write(stdinData);
+            py.stdin.end();
+        }
+
+        py.stdout.on('data', (d) => { output += d.toString(); });
+        py.stderr.on('data', (d) => { errOutput += d.toString(); });
+
+        py.on('close', (code) => {
+            if (hasErrored) return;
+            if (code !== 0) {
+                try {
+                    const fallbackResult = jsFallbackFn();
+                    return res.json(fallbackResult);
+                } catch (jsErr) {
+                    return res.status(500).json({ status: 'error', message: errOutput || jsErr.message });
+                }
+            }
+            try {
+                const result = JSON.parse(output.trim());
+                res.json(result);
+            } catch (e) {
+                try {
+                    const fallbackResult = jsFallbackFn();
+                    return res.json(fallbackResult);
+                } catch (jsErr) {
+                    res.status(500).json({ status: 'error', message: 'Failed to parse output' });
+                }
+            }
+        });
+    } catch (e) {
+        try {
+            const fallbackResult = jsFallbackFn();
+            return res.json(fallbackResult);
+        } catch (jsErr) {
+            res.status(500).json({ status: 'error', message: e.message });
+        }
+    }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -136,29 +194,16 @@ app.get('/api/download-model', (req, res) => {
     }
 });
 
-// 4. Run ML Risk Prediction (Python XGBoost)
+// 4. Run ML Risk Prediction (Python XGBoost with JS Fallback)
 app.post('/api/predict', (req, res) => {
     const inputData = req.body;
     const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-    
-    const py = spawn(PYTHON_PATH, [bridgeScript, 'predict', JSON.stringify(inputData)]);
-    let output = '';
-    let errOutput = '';
-    
-    py.stdout.on('data', (d) => { output += d.toString(); });
-    py.stderr.on('data', (d) => { errOutput += d.toString(); });
-    
-    py.on('close', (code) => {
-        if (code !== 0) {
-            return res.status(500).json({ status: 'error', message: errOutput || 'Python process failed' });
-        }
-        try {
-            const result = JSON.parse(output.trim());
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ status: 'error', message: 'Failed to parse model output: ' + output });
-        }
-    });
+    runWithPythonFallback(
+        [bridgeScript, 'predict', JSON.stringify(inputData)],
+        null,
+        () => jsEngine.predictSingle(inputData),
+        res
+    );
 });
 
 // 4b. Batch Evaluation Endpoint
@@ -167,29 +212,13 @@ app.post('/api/batch-predict', (req, res) => {
     if (!records || !records.length) {
         records = db.getAllSuppliers();
     }
-    
     const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-    const py = spawn(PYTHON_PATH, [bridgeScript, 'batch']);
-    let output = '';
-    let errOutput = '';
-    
-    py.stdin.write(JSON.stringify(records));
-    py.stdin.end();
-    
-    py.stdout.on('data', (d) => { output += d.toString(); });
-    py.stderr.on('data', (d) => { errOutput += d.toString(); });
-    
-    py.on('close', (code) => {
-        if (code !== 0) {
-            return res.status(500).json({ status: 'error', message: errOutput || 'Batch prediction failed' });
-        }
-        try {
-            const result = JSON.parse(output.trim());
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ status: 'error', message: 'Failed to parse batch output' });
-        }
-    });
+    runWithPythonFallback(
+        [bridgeScript, 'batch'],
+        JSON.stringify(records),
+        () => jsEngine.batchPredict(records),
+        res
+    );
 });
 
 // 4c. Upload CSV and Batch Score
@@ -201,15 +230,15 @@ app.post('/api/upload-csv-batch', upload.single('csv'), (req, res) => {
     try {
         const rawCSV = fs.readFileSync(req.file.path, 'utf-8');
         const lines = rawCSV.trim().split('\n');
-        const headers = lines[0].trim().split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+        const headers = db.parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
         
         const records = [];
         for (let i = 1; i < lines.length; i++) {
             if (!lines[i].trim()) continue;
-            const vals = lines[i].trim().split(',');
+            const vals = db.parseCSVLine(lines[i]);
             const obj = {};
             headers.forEach((h, idx) => {
-                let val = vals[idx] ? vals[idx].trim() : '';
+                let val = vals[idx] !== undefined ? vals[idx].trim() : '';
                 if (!isNaN(val) && val !== '') val = Number(val);
                 obj[h] = val;
             });
@@ -217,27 +246,12 @@ app.post('/api/upload-csv-batch', upload.single('csv'), (req, res) => {
         }
         
         const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-        const py = spawn(PYTHON_PATH, [bridgeScript, 'batch']);
-        let output = '';
-        let errOutput = '';
-        
-        py.stdin.write(JSON.stringify(records));
-        py.stdin.end();
-        
-        py.stdout.on('data', (d) => { output += d.toString(); });
-        py.stderr.on('data', (d) => { errOutput += d.toString(); });
-        
-        py.on('close', (code) => {
-            if (code !== 0) {
-                return res.status(500).json({ status: 'error', message: errOutput || 'Batch prediction failed' });
-            }
-            try {
-                const result = JSON.parse(output.trim());
-                res.json(result);
-            } catch (e) {
-                res.status(500).json({ status: 'error', message: 'Failed to parse batch output' });
-            }
-        });
+        runWithPythonFallback(
+            [bridgeScript, 'batch'],
+            JSON.stringify(records),
+            () => jsEngine.batchPredict(records),
+            res
+        );
     } catch (e) {
         res.status(500).json({ status: 'error', message: 'CSV parse error: ' + e.message });
     }
@@ -246,48 +260,24 @@ app.post('/api/upload-csv-batch', upload.single('csv'), (req, res) => {
 // 4d. Model Feature Importance
 app.get('/api/feature-importance', (req, res) => {
     const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-    const py = spawn(PYTHON_PATH, [bridgeScript, 'importance']);
-    let output = '';
-    let errOutput = '';
-    
-    py.stdout.on('data', (d) => { output += d.toString(); });
-    py.stderr.on('data', (d) => { errOutput += d.toString(); });
-    
-    py.on('close', (code) => {
-        if (code !== 0) {
-            return res.status(500).json({ status: 'error', message: errOutput || 'Feature importance failed' });
-        }
-        try {
-            const result = JSON.parse(output.trim());
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ status: 'error', message: 'Failed to parse feature importance output' });
-        }
-    });
+    runWithPythonFallback(
+        [bridgeScript, 'importance'],
+        null,
+        () => jsEngine.getFeatureImportance(),
+        res
+    );
 });
 
 // 4e. What-If Sensitivity Simulator
 app.post('/api/sensitivity', (req, res) => {
     const { feature_name, base_data = {} } = req.body;
     const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-    const py = spawn(PYTHON_PATH, [bridgeScript, 'sensitivity', feature_name, JSON.stringify(base_data)]);
-    let output = '';
-    let errOutput = '';
-    
-    py.stdout.on('data', (d) => { output += d.toString(); });
-    py.stderr.on('data', (d) => { errOutput += d.toString(); });
-    
-    py.on('close', (code) => {
-        if (code !== 0) {
-            return res.status(500).json({ status: 'error', message: errOutput || 'Sensitivity calculation failed' });
-        }
-        try {
-            const result = JSON.parse(output.trim());
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ status: 'error', message: 'Failed to parse sensitivity output' });
-        }
-    });
+    runWithPythonFallback(
+        [bridgeScript, 'sensitivity', feature_name, JSON.stringify(base_data)],
+        null,
+        () => jsEngine.whatIfSensitivity(base_data, feature_name),
+        res
+    );
 });
 
 // 5. RAG Semantic Query (searches Indian Suppliers + Uploaded PDFs)
@@ -298,24 +288,18 @@ app.post('/api/rag-query', (req, res) => {
     }
     
     const bridgeScript = path.join(__dirname, 'ml_bridge.py');
-    const py = spawn(PYTHON_PATH, [bridgeScript, 'rag', query, top_k.toString()]);
-    let output = '';
-    let errOutput = '';
-    
-    py.stdout.on('data', (d) => { output += d.toString(); });
-    py.stderr.on('data', (d) => { errOutput += d.toString(); });
-    
-    py.on('close', (code) => {
-        if (code !== 0) {
-            return res.status(500).json({ status: 'error', message: errOutput || 'RAG query failed' });
-        }
-        try {
-            const result = JSON.parse(output.trim());
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ status: 'error', message: 'Failed to parse RAG output: ' + output });
-        }
-    });
+    runWithPythonFallback(
+        [bridgeScript, 'rag', query, top_k.toString()],
+        null,
+        () => {
+            let pdfKnowledge = [];
+            if (fs.existsSync(PDF_KNOWLEDGE_FILE)) {
+                try { pdfKnowledge = JSON.parse(fs.readFileSync(PDF_KNOWLEDGE_FILE, 'utf-8')); } catch (e) {}
+            }
+            return jsEngine.ragQuery(query, db.getAllSuppliers(), pdfKnowledge, top_k);
+        },
+        res
+    );
 });
 
 // 6. PDF Upload & Ingestion for RAG
@@ -451,12 +435,16 @@ app.post('/api/retrain', (req, res) => {
     });
 });
 
-// Start Server
-app.listen(PORT, () => {
-    console.log(`=======================================================`);
-    console.log(`🇮🇳 Indian Supplier Risk Platform Running!`);
-    console.log(`📡 Local URL: http://localhost:${PORT}`);
-    console.log(`📂 Database: webapp/db/suppliers.json (India Only)`);
-    console.log(`📄 PDF Knowledge: webapp/db/pdf_knowledge.json`);
-    console.log(`=======================================================`);
-});
+// Start Server (if executed directly)
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`=======================================================`);
+        console.log(`🇮🇳 Indian Supplier Risk Platform Running!`);
+        console.log(`📡 Local URL: http://localhost:${PORT}`);
+        console.log(`📂 Database: webapp/db/suppliers.json (India Only)`);
+        console.log(`📄 PDF Knowledge: webapp/db/pdf_knowledge.json`);
+        console.log(`=======================================================`);
+    });
+}
+
+module.exports = app;

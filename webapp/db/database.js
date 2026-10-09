@@ -4,6 +4,25 @@ const path = require('path');
 const DB_FILE = path.join(__dirname, 'suppliers.json');
 const CSV_FILE = path.join(__dirname, '..', '..', 'suppliers_dataset.csv');
 
+function parseCSVLine(line) {
+    const values = [];
+    let insideQuotes = false;
+    let currentVal = '';
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+            insideQuotes = !insideQuotes;
+        } else if (char === ',' && !insideQuotes) {
+            values.push(currentVal.trim());
+            currentVal = '';
+        } else {
+            currentVal += char;
+        }
+    }
+    values.push(currentVal.trim());
+    return values.map(v => v.replace(/^"|"$/g, '').trim());
+}
+
 // Initialize database
 function initDatabase() {
     if (!fs.existsSync(DB_FILE)) {
@@ -11,15 +30,15 @@ function initDatabase() {
         if (fs.existsSync(CSV_FILE)) {
             const rawCSV = fs.readFileSync(CSV_FILE, 'utf-8');
             const lines = rawCSV.trim().split('\n');
-            const headers = lines[0].trim().split(',').map(h => h.trim());
+            const headers = parseCSVLine(lines[0]);
             
             const records = [];
             for (let i = 1; i < lines.length; i++) {
                 if (!lines[i].trim()) continue;
-                const vals = lines[i].trim().split(',');
+                const vals = parseCSVLine(lines[i]);
                 const obj = {};
                 headers.forEach((h, idx) => {
-                    let val = vals[idx] ? vals[idx].trim() : '';
+                    let val = vals[idx] !== undefined ? vals[idx] : '';
                     if (!isNaN(val) && val !== '') {
                         val = Number(val);
                     }
@@ -78,5 +97,6 @@ module.exports = {
     getAllSuppliers,
     getSupplierById,
     createSupplier,
-    getDatabaseStats
+    getDatabaseStats,
+    parseCSVLine
 };
