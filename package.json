@@ -1,0 +1,20 @@
+{
+  "name": "supplier-risk-intelligence",
+  "version": "1.0.0",
+  "description": "India Enterprise Supplier Risk Intelligence",
+  "main": "webapp/server.js",
+  "scripts": {
+    "install-deps": "cd webapp && npm install",
+    "build": "cd webapp && npm install",
+    "start": "node webapp/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

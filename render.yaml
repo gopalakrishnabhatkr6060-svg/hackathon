@@ -1,11 +1,11 @@
 services:
   - type: web
     name: supplier-risk-intelligence
-    runtime: docker
+    runtime: node
     plan: free
     region: oregon
+    buildCommand: npm install && cd webapp && npm install
+    startCommand: node webapp/server.js
     envVars:
       - key: PORT
         value: 10000
-      - key: PYTHON_PATH
-        value: /opt/venv/bin/python3
